@@ -1,0 +1,121 @@
+set_input_mode:
+  name: Set input mode
+  description: >-
+    Change how physical buttons interact with relays on the device.
+    Sends AT+INMODE=<n> via UDP broadcast on port 65535.
+
+    This is INDEPENDENT of network work mode (AT+MODE).
+    The device reboots after saving (~3 seconds).
+
+    Modes:
+      - "unlinked": Buttons are DECOUPLED from relays. Pressing a button
+        does NOT toggle its relay. Relays controlled only via HA.
+      - "trigger": Buttons DIRECTLY toggle their matching relays.
+        Each button press toggles the corresponding relay on/off.
+      - "auto": Auto-send input state when button changes.
+  fields:
+    device:
+      name: Device
+      description: Target device
+      required: true
+      selector:
+        device:
+          integration: hhc_n8i8op
+    mode:
+      name: Input mode
+      description: >-
+        "unlinked" — buttons not linked to relays,
+        "trigger" — buttons directly toggle their relays,
+        "auto" — auto-send state on button change.
+      required: true
+      example: trigger
+      selector:
+        select:
+          options:
+            - label: "Unlinked (buttons do nothing)"
+              value: unlinked
+            - label: "Trigger (buttons → relays)"
+              value: trigger
+            - label: "Auto"
+              value: auto
+
+set_work_mode:
+  name: Set work mode
+  description: >-
+    Change the device network work mode.
+    Sends AT+MODE=<n> then AT+SAVE=1 via UDP broadcast on port 65535.
+
+    This is INDEPENDENT of input/button mode (AT+INMODE).
+
+    WARNING: changing this may break the current connection!
+    After changing from TCP Server to TCP Client or UDP, you may need to
+    update the integration's connection settings accordingly.
+  fields:
+    device:
+      name: Device
+      description: Target device
+      required: true
+      selector:
+        device:
+          integration: hhc_n8i8op
+    mode:
+      name: Mode
+      description: >-
+        0 = TCP Server (device listens for incoming connections),
+        1 = TCP Client (device actively connects to a remote server),
+        2 = UDP (connectionless datagram communication).
+      required: true
+      example: 0
+      selector:
+        select:
+          options:
+            - label: "TCP Server"
+              value: "0"
+            - label: "TCP Client"
+              value: "1"
+            - label: "UDP"
+              value: "2"
+
+read_device_config:
+  name: Read device configuration
+  description: >-
+    Discover and read the current hardware configuration from the device.
+    Sends SEARCH packet via UDP broadcast on port 65535, device responds
+    with binary packet containing IP, subnet mask, gateway, ports,
+    work mode, input mode, MAC address, and device name.
+  fields:
+    device:
+      name: Device
+      description: Target device
+      required: true
+      selector:
+        device:
+          integration: hhc_n8i8op
+
+all_on:
+  name: All relays on
+  description: >-
+    Turn ALL relays ON simultaneously by sending the 'allon' command.
+    Equivalent to pressing the IN9 "All On" hardware button.
+  fields:
+    device:
+      name: Device
+      description: Target device
+      required: true
+      selector:
+        device:
+          integration: hhc_n8i8op
+
+all_off:
+  name: All relays off
+  description: >-
+    Turn ALL relays OFF simultaneously by sending the 'alloff' command.
+    Equivalent to pressing the IN10 "All Off" hardware button.
+  fields:
+    device:
+      name: Device
+      description: Target device
+      required: true
+      selector:
+        device:
+          integration: hhc_n8i8op

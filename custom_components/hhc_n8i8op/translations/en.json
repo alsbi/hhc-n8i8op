@@ -1,0 +1,150 @@
+{
+  "title": "hhc-n8i8op",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Discovered devices",
+        "description": "Found {count} device(s) on the network. Select one to add, or enter manually.",
+        "data": {
+          "selected_device": "Device"
+        }
+      },
+      "confirm": {
+        "title": "Confirm device",
+        "description": "Add {device}?"
+      },
+      "manual": {
+        "title": "Connect to device",
+        "description": "Enter connection parameters for the relay board.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "protocol": "Protocol",
+          "channel_count": "Number of channels"
+        },
+        "data_description": {
+          "host": "IP address of the hhc-n8i8op board",
+          "port": "Control port (default 5000)",
+          "protocol": "TCP or UDP — must match the device work mode setting",
+          "channel_count": "Physical output channels on the board (1–8)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to device"
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Device options",
+        "data": {
+          "device_name": "Device name",
+          "poll_interval": "Poll interval (sec)",
+          "input_mode": "Input mode",
+          "work_mode": "Work mode",
+          "channel_types_0": "Channel 1 type",
+          "channel_types_1": "Channel 2 type",
+          "channel_types_2": "Channel 3 type",
+          "channel_types_3": "Channel 4 type",
+          "channel_types_4": "Channel 5 type",
+          "channel_types_5": "Channel 6 type",
+          "channel_types_6": "Channel 7 type",
+          "channel_types_7": "Channel 8 type"
+        },
+        "data_description": {
+          "device_name": "Name stored on the relay board (AT+NAME)",
+          "poll_interval": "How often to poll the device state (0.2–10 seconds)",
+          "input_mode": "Controls how physical buttons interact with relays",
+          "work_mode": "Network protocol used by the device (changing may break connection)"
+        }
+      }
+    }
+  },
+  "selector": {
+    "protocol": {
+      "options": {
+        "tcp": "TCP",
+        "udp": "UDP"
+      }
+    },
+    "discovered_device": {
+      "options": {}
+    },
+    "input_mode": {
+      "options": {
+        "_unchanged": "Don't change (device unreachable)",
+        "unlinked": "Unlinked (buttons do nothing)",
+        "trigger": "Trigger (buttons toggle relays)"
+      }
+    },
+    "work_mode": {
+      "options": {
+        "_unchanged": "Don't change (device unreachable)",
+        "0": "TCP Service (device listens)",
+        "2": "UDP Service (connectionless)"
+      }
+    },
+    "channel_type": {
+      "options": {
+        "switch": "Switch",
+        "light": "Light"
+      }
+    }
+  },
+  "entity": {
+    "button": {
+      "all_on": {
+        "name": "All on"
+      },
+      "all_off": {
+        "name": "All off"
+      }
+    },
+    "binary_sensor": {
+      "global_input_all_on": {
+        "name": "Input all on"
+      },
+      "global_input_all_off": {
+        "name": "Input all off"
+      }
+    }
+  },
+  "services": {
+    "set_input_mode": {
+      "name": "Set input mode",
+      "description": "Change how physical buttons interact with relays. Sends AT+INMODE via UDP broadcast.",
+      "fields": {
+        "mode": {
+          "name": "Mode",
+          "description": "\"unlinked\" — buttons decoupled from relays, \"trigger\" — buttons directly toggle their relays, \"auto\" — auto-send state on button change"
+        }
+      }
+    },
+    "set_work_mode": {
+      "name": "Set work mode",
+      "description": "Change the device network protocol. Warning: this may break the current connection.",
+      "fields": {
+        "mode": {
+          "name": "Mode",
+          "description": "0 = TCP Server, 1 = TCP Client, 2 = UDP"
+        }
+      }
+    },
+    "read_device_config": {
+      "name": "Read device configuration",
+      "description": "Discover device and read its current hardware configuration."
+    },
+    "all_on": {
+      "name": "All relays on",
+      "description": "Turn all relays on simultaneously."
+    },
+    "all_off": {
+      "name": "All relays off",
+      "description": "Turn all relays off simultaneously."
+    }
+  }
+}

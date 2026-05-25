@@ -1,5 +1,6 @@
 {
-  "name": "HHC-N8I8OP relay",
-  "render_readme": true,
-  "country": "RU"
+  "name": "hhc-n8i8op",
+  "country": "RU",
+  "homeassistant": "2025.4",
+  "render_readme": true
 }
