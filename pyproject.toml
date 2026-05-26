@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hhc-n8i8op-protocol"
-version = "3.5.1"
-description = "HHC-N8I8OP protocol implementation for Home Assistant"
+version = "3.1.0"
+description = "Protocol library and Home Assistant integration for HHC-N8I8OP 8-channel relay"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.12"
