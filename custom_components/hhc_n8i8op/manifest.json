@@ -14,9 +14,6 @@
   "dhcp": [
     {
       "macaddress": "485300*"
-    },
-    {
-      "registered_devices": true
     }
   ]
 }

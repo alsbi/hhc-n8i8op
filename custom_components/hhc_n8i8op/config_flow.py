@@ -229,7 +229,6 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=schema,
-            description_placeholders={"count": str(len(discovered))},
         )
 
     async def async_step_confirm(
@@ -313,7 +312,7 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
             try:
                 at_client = HHCATClient(host)
                 cfg = await asyncio.wait_for(
-                    at_client.discover(host), timeout=10.0
+                    at_client.discover(host, timeout=1.5), timeout=5.0
                 )
                 if cfg is not None:
                     _LOGGER.info(

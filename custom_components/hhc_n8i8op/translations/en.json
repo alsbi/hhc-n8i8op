@@ -3,15 +3,15 @@
   "config": {
     "step": {
       "user": {
-        "title": "Discovered devices",
-        "description": "Found {count} device(s) on the network. Select one to add, or enter manually.",
+        "title": "Add device",
+        "description": "Select a device to add, or enter connection parameters manually.",
         "data": {
           "selected_device": "Device"
         }
       },
       "confirm": {
         "title": "Confirm device",
-        "description": "Add {device}?"
+        "description": "Add this device?"
       },
       "manual": {
         "title": "Connect to device",
