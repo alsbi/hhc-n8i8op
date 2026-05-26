@@ -286,82 +286,55 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manual entry when auto-discovery finds nothing.
+        """Manual entry — user enters IP only.
 
-        No reachability probe is performed — the device may be on another
-        subnet or powered off.  setup_entry will retry connection in the
-        background once the device becomes available.
+        Probe auto-detects TCP vs UDP on port 5000.
+        If device is unreachable, shows error — no entry is created.
         """
         errors: dict[str, str] = {}
 
         if user_input is not None:
             host: str = user_input[CONF_HOST]
 
-            unique_id = (
-                self._dhcp_info.macaddress if self._dhcp_info is not None else host
-            )
-            await self.async_set_unique_id(unique_id)
-            self._abort_if_unique_id_configured()
-
-            init_options: dict[str, Any] = {
-                OPT_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
-                OPT_CHANNEL_TYPES: {},
-            }
-            # Best-effort: query device info if reachable right now.
-            # Never block setup when the relay is off-line.
+            # Auto-detect protocol via probe (TCP + UDP in parallel)
+            protocol: str | None = None
             try:
-                at_client = HHCATClient(host)
-                cfg = await asyncio.wait_for(
-                    at_client.discover(host, timeout=1.5), timeout=5.0
-                )
-                if cfg is not None:
-                    _LOGGER.info(
-                        "Manual setup: device %s responded — name=%s mac=%s mode=%s",
-                        host, cfg.name, cfg.mac, cfg.mode,
-                    )
-                    if cfg.inmode is not None:
-                        real_mode = DEVICE_TO_INPUT_MODE.get(cfg.inmode)
-                        if real_mode is not None:
-                            init_options[OPT_INPUT_MODE] = real_mode
-                    if cfg.mode is not None:
-                        init_options[OPT_WORK_MODE] = str(cfg.mode)
-                    if cfg.name:
-                        init_options[OPT_DEVICE_NAME] = cfg.name
-                    if cfg.mac:
-                        await self.async_set_unique_id(cfg.mac)
-                        self._abort_if_unique_id_configured()
+                protocol = await HHCATClient.probe(host, timeout=15.0)
             except Exception:
-                _LOGGER.info("Manual setup: could not query device %s (offline or wrong IP)", host)
+                pass
 
-            dev_name = init_options.get(OPT_DEVICE_NAME, "")
-            title = f"{dev_name} ({host})" if dev_name else f"hhc n8i8op ({host})"
+            if protocol is None:
+                errors["base"] = "cannot_connect"
+            else:
+                _LOGGER.info("Manual setup: probe detected %s → %s", host, protocol)
 
-            return self.async_create_entry(
-                title=title,
-                data=user_input,
-                options=init_options,
-            )
+                unique_id = (
+                    self._dhcp_info.macaddress
+                    if self._dhcp_info is not None
+                    else host
+                )
+                await self.async_set_unique_id(unique_id)
+                self._abort_if_unique_id_configured()
+
+                return self.async_create_entry(
+                    title=f"hhc n8i8op ({host})",
+                    data={
+                        CONF_HOST: host,
+                        CONF_PORT: DEFAULT_PORT,
+                        CONF_PROTOCOL: protocol,
+                        CONF_CHANNEL_COUNT: DEFAULT_CHANNEL_COUNT,
+                    },
+                    options={
+                        OPT_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
+                        OPT_CHANNEL_TYPES: {},
+                    },
+                )
 
         default_host = self._dhcp_info.ip if self._dhcp_info is not None else ""
 
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_HOST, default=default_host): str,
-                vol.Required(CONF_PORT, default=DEFAULT_PORT): cv.port,
-                vol.Required(
-                    CONF_PROTOCOL, default=DEFAULT_PROTOCOL
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=["tcp", "udp"],
-                        translation_key="protocol",
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
-                ),
-                vol.Required(
-                    CONF_CHANNEL_COUNT, default=DEFAULT_CHANNEL_COUNT
-                ): vol.All(int, vol.Range(min=1, max=MAX_CHANNEL_COUNT)),
-            }
-        )
+        schema = vol.Schema({
+            vol.Required(CONF_HOST, default=default_host): str,
+        })
 
         return self.async_show_form(step_id="manual", data_schema=schema, errors=errors)
 
