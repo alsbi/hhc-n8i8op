@@ -32,6 +32,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector, config_validation as cv
 
 from .const import (
+    AT_PORT,
     CHANNEL_TYPE_LIGHT,
     CHANNEL_TYPE_SWITCH,
     CONF_CHANNEL_COUNT,
@@ -55,9 +56,8 @@ from .const import (
     OPT_INPUT_MODE,
     OPT_POLL_INTERVAL,
     OPT_WORK_MODE,
-    SOCKET_TIMEOUT,
 )
-from .coordinator import HHCCoordinator, HHCProtocolClient, HHCATClient
+from .coordinator import HHCCoordinator, HHCATClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
         ip = discovery_info.ip
         mac = discovery_info.macaddress
 
-        _LOGGER.debug("DHCP discovery: IP=%s MAC=%s", ip, mac)
+        _LOGGER.info("DHCP discovery triggered: IP=%s MAC=%s", ip, mac)
 
         await self.async_set_unique_id(mac)
 
@@ -112,7 +112,10 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
             if entry.unique_id == mac:
                 current_host = entry.data.get(CONF_HOST)
                 if current_host != ip:
-                    _LOGGER.info("Device %s changed IP: %s → %s", mac, current_host, ip)
+                    _LOGGER.info(
+                        "DHCP: device %s changed IP %s → %s, updating entry",
+                        mac, current_host, ip,
+                    )
                     new_data = dict(entry.data)
                     new_data[CONF_HOST] = ip
                     self.hass.config_entries.async_update_entry(entry, data=new_data)
@@ -120,22 +123,28 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
                     self.hass.async_create_task(
                         self.hass.config_entries.async_reload(entry.entry_id)
                     )
+                else:
+                    _LOGGER.debug("DHCP: device %s at same IP %s, ignoring", mac, ip)
                 self.async_abort(reason="already_configured")
                 # async_abort raises, but type checker doesn't know that
                 return self.async_abort(reason="already_configured")  # pragma: no cover
 
         # New device — verify with targeted AT+SEARCH broadcast
+        _LOGGER.info("DHCP: new device %s at %s, verifying with AT+SEARCH...", mac, ip)
         cfg = None
         try:
             cfg = await HHCATClient.discover(ip, timeout=10.0)
         except Exception as exc:
-            _LOGGER.debug("SEARCH failed for DHCP-discovered %s: %s", ip, exc)
+            _LOGGER.warning("DHCP: SEARCH failed for %s: %s", ip, exc)
 
         if cfg is not None and cfg.ip == ip:
             dev_name = cfg.name or ""
             title = f"{dev_name} ({ip})" if dev_name else f"hhc n8i8op ({ip})"
             protocol = "udp" if cfg.mode == 2 else "tcp"
-
+            _LOGGER.info(
+                "DHCP: confirmed device %s (name=%s mode=%s proto=%s), creating entry",
+                mac, dev_name, cfg.mode, protocol,
+            )
             return self.async_create_entry(
                 title=title,
                 data={
@@ -158,6 +167,10 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
             )
 
         # SEARCH didn't confirm — let user set up manually with this IP pre-filled
+        _LOGGER.warning(
+            "DHCP: SEARCH could not confirm device at %s, falling back to manual setup",
+            ip,
+        )
         self._dhcp_info = discovery_info
         return await self.async_step_manual()
 
@@ -178,15 +191,19 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
             if device_info is not None:
                 # Store selection for confirmation step
                 self._selected_device = device_info
+                _LOGGER.info("User selected device at %s", selected_ip)
                 return await self.async_step_confirm()
             # "manual" or invalid → go to manual entry
+            _LOGGER.info("User chose manual entry")
             return await self.async_step_manual()
 
         # Run subnet scan to find all HHC devices
+        _LOGGER.info("Starting network scan (AT+SEARCH broadcast on port %d)", AT_PORT)
         discovered = await self._scan_network()
 
         if not discovered:
             # No devices found → skip straight to manual
+            _LOGGER.info("Network scan found no devices, showing manual entry form")
             return await self.async_step_manual()
 
         self._discovered_devices = discovered
@@ -209,7 +226,11 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
 
-        return self.async_show_form(step_id="user", data_schema=schema)
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            description_placeholders={"count": str(len(discovered))},
+        )
 
     async def async_step_confirm(
         self, user_input: dict[str, Any] | None = None
@@ -229,7 +250,10 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
             dev_name = info.get("_devname", "")
             ip_addr = info[CONF_HOST]
             title = f"{dev_name} ({ip_addr})" if dev_name else f"hhc n8i8op ({ip_addr})"
-
+            _LOGGER.info(
+                "Creating entry for %s: name=%s mac=%s proto=%s port=%d",
+                ip_addr, dev_name, mac, info[CONF_PROTOCOL], info[CONF_PORT],
+            )
             return self.async_create_entry(
                 title=title,
                 data={
@@ -292,6 +316,10 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
                     at_client.discover(host), timeout=10.0
                 )
                 if cfg is not None:
+                    _LOGGER.info(
+                        "Manual setup: device %s responded — name=%s mac=%s mode=%s",
+                        host, cfg.name, cfg.mac, cfg.mode,
+                    )
                     if cfg.inmode is not None:
                         real_mode = DEVICE_TO_INPUT_MODE.get(cfg.inmode)
                         if real_mode is not None:
@@ -304,7 +332,7 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
                         await self.async_set_unique_id(cfg.mac)
                         self._abort_if_unique_id_configured()
             except Exception:
-                _LOGGER.debug("Could not query device %s during manual setup", host)
+                _LOGGER.info("Manual setup: could not query device %s (offline or wrong IP)", host)
 
             dev_name = init_options.get(OPT_DEVICE_NAME, "")
             title = f"{dev_name} ({host})" if dev_name else f"hhc n8i8op ({host})"
@@ -394,7 +422,7 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
         try:
             devices = await HHCATClient.scan_subnet(timeout=_SCAN_TIMEOUT)
         except Exception as exc:
-            _LOGGER.debug("Subnet scan failed: %s", exc)
+            _LOGGER.warning("Subnet scan failed: %s", exc)
             return results
 
         # Build set of already-configured unique IDs to filter out
@@ -403,10 +431,14 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
             for entry in self.hass.config_entries.async_entries(DOMAIN)
             if entry.unique_id is not None
         }
+        _LOGGER.debug(
+            "Already configured unique IDs: %s", configured_uids or "(none)",
+        )
 
         for ip_addr, cfg in devices:
             uid = cfg.mac or ip_addr
             if uid in configured_uids:
+                _LOGGER.debug("Skipping already configured device %s (%s)", ip_addr, uid)
                 continue
 
             protocol = "udp" if cfg.mode == 2 else "tcp"
@@ -421,7 +453,10 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
                 "_mode": cfg.mode,
             }
 
-        _LOGGER.info("Network scan found %d unconfigured device(s)", len(results))
+        _LOGGER.info(
+            "Network scan found %d device(s), %d new unconfigured",
+            len(devices), len(results),
+        )
         return results
 
 

@@ -39,6 +39,11 @@ async def discover(
     search_payload = f'AT+SEARCH="{last_octet}"'.encode("ascii")
     readip_payload = f'AT+READIP="{ip}"'.encode("ascii")
 
+    _LOGGER.info("Discovering device at %s (timeout=%.1fs)", ip, timeout)
+    _LOGGER.debug(
+        "Discovery payloads: SEARCH=%s READIP=%s", search_payload, readip_payload,
+    )
+
     for attempt in range(3):
         loop = asyncio.get_running_loop()
         future: asyncio.Future[bytes] = loop.create_future()
@@ -51,31 +56,48 @@ async def discover(
             sock = transport.get_extra_info("socket")
             if sock is not None:
                 sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_BROADCAST, 1)
+
             bcast = "255.255.255.255"
+            # Broadcast SEARCH + READIP, then unicast SEARCH to target IP
             transport.sendto(search_payload, (bcast, AT_PORT))
             await asyncio.sleep(0.15)
             transport.sendto(readip_payload, (bcast, AT_PORT))
             await asyncio.sleep(0.15)
             transport.sendto(search_payload, (ip, AT_PORT))
+            _LOGGER.debug(
+                "Attempt %d/3: sent SEARCH(bcast) + READIP(bcast) + SEARCH(%s)",
+                attempt + 1, ip,
+            )
+
             data = await asyncio.wait_for(future, timeout=timeout)
             cfg = parse_search_response(data)
             if cfg is not None:
+                _LOGGER.info(
+                    "Discovered %s: name=%s mac=%s mode=%s inmode=%s port=%s",
+                    ip, cfg.name, cfg.mac, cfg.mode, cfg.inmode, cfg.local_port,
+                )
                 return cfg
-            _LOGGER.debug(
-                "Attempt %d: got %d bytes from %s but couldn't parse as TLV",
-                attempt + 1,
-                len(data),
-                ip,
+            _LOGGER.warning(
+                "Attempt %d/3 for %s: got %d bytes but not valid TLV response",
+                attempt + 1, ip, len(data),
             )
         except asyncio.TimeoutError:
-            _LOGGER.debug("Attempt %d timed out for %s", attempt + 1, ip)
+            _LOGGER.info(
+                "Attempt %d/3 for %s timed out (%.1fs)",
+                attempt + 1, ip, timeout,
+            )
         except OSError as exc:
-            _LOGGER.debug("Attempt %d failed for %s: %s", attempt + 1, ip, exc)
+            _LOGGER.warning(
+                "Attempt %d/3 for %s network error: %s",
+                attempt + 1, ip, exc,
+            )
         finally:
             if transport is not None:
                 transport.close()
         if attempt < 2:
             await asyncio.sleep(0.5)
+
+    _LOGGER.warning("Discovery failed after 3 attempts for %s", ip)
     return None
 
 
@@ -89,6 +111,7 @@ async def read_config_unicast(
     Used when we already know the IP and need the full TLV config.
     """
     readip_payload = f'AT+READIP="{ip}"'.encode("ascii")
+    _LOGGER.debug("Reading config via unicast READIP for %s", ip)
     loop = asyncio.get_running_loop()
     future: asyncio.Future[bytes] = loop.create_future()
     transport: asyncio.DatagramTransport | None = None
@@ -102,16 +125,15 @@ async def read_config_unicast(
         data = await asyncio.wait_for(future, timeout=timeout)
         cfg = parse_search_response(data)
         if cfg is not None:
+            _LOGGER.info("Unicast config read for %s: name=%s mac=%s", ip, cfg.name, cfg.mac)
             return cfg
-        _LOGGER.debug(
-            "read_config_unicast: got %d bytes from %s but couldn't parse as TLV",
-            len(data),
-            ip,
+        _LOGGER.warning(
+            "Unicast READIP for %s: got %d bytes but not valid TLV", ip, len(data),
         )
     except asyncio.TimeoutError:
-        _LOGGER.debug("read_config_unicast timed out for %s", ip)
+        _LOGGER.info("Unicast READIP timed out for %s (%.1fs)", ip, timeout)
     except OSError as exc:
-        _LOGGER.debug("read_config_unicast failed for %s: %s", ip, exc)
+        _LOGGER.warning("Unicast READIP failed for %s: %s", ip, exc)
     finally:
         if transport is not None:
             transport.close()
@@ -257,11 +279,15 @@ async def scan_subnet(
         if sock is not None:
             sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_BROADCAST, 1)
         bcast = "255.255.255.255"
+        _LOGGER.info(
+            "Scanning subnet via AT+SEARCH broadcast (256 packets to %s:%d, timeout=%.1fs)",
+            bcast, AT_PORT, min(timeout, 3.0),
+        )
         for n in range(256):
             transport.sendto(f'AT+SEARCH="{n}"'.encode(), (bcast, AT_PORT))
         await asyncio.sleep(min(timeout, 3.0))
     except OSError as exc:
-        _LOGGER.debug("Subnet scan failed: %s", exc)
+        _LOGGER.warning("Subnet scan failed: %s", exc)
         return results
     finally:
         if transport is not None:
@@ -274,9 +300,20 @@ async def scan_subnet(
             seen_ips.add(cfg.ip)
             results.append((cfg.ip, cfg))
         elif sender_ip not in seen_ips:
+            _LOGGER.debug(
+                "Scan: unparseable response from %s (%d bytes), adding as minimal device",
+                sender_ip, len(raw),
+            )
             minimal_cfg = HHCDeviceConfig(ip=sender_ip)
             seen_ips.add(sender_ip)
             results.append((sender_ip, minimal_cfg))
 
-    _LOGGER.info("Subnet scan found %d device(s): %s", len(results), list(seen_ips))
+    if results:
+        _LOGGER.info(
+            "Subnet scan found %d device(s): %s",
+            len(results),
+            ", ".join(f"{ip} ({c.name or 'unnamed'})" for ip, c in results),
+        )
+    else:
+        _LOGGER.info("Subnet scan found no devices")
     return results
