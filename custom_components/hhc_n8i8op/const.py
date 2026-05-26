@@ -8,11 +8,6 @@ CONF_PORT = "port"
 CONF_PROTOCOL = "protocol"
 CONF_CHANNEL_COUNT = "channel_count"
 
-# Legacy YAML config keys (v2 compatibility)
-LEGACY_CONF_IP = "ip"
-LEGACY_CONF_NAME = "name"
-LEGACY_CONF_LIGHTS = "lights"
-
 # Config entry options keys (changeable via OptionsFlow)
 OPT_POLL_INTERVAL = "poll_interval"
 OPT_CHANNEL_TYPES = "channel_types"

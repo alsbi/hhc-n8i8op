@@ -1,6 +1,5 @@
 {
   "name": "HHC-N8I8OP Relay",
   "homeassistant": "2025.1.0",
-  "zip_release": true,
   "render_readme": true
 }

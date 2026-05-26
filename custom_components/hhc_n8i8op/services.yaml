@@ -13,14 +13,10 @@ set_input_mode:
       - "trigger": Buttons DIRECTLY toggle their matching relays.
         Each button press toggles the corresponding relay on/off.
       - "auto": Auto-send input state when button changes.
-  fields:
+  target:
     device:
-      name: Device
-      description: Target device
-      required: true
-      selector:
-        device:
-          integration: hhc_n8i8op
+      integration: hhc_n8i8op
+  fields:
     mode:
       name: Input mode
       description: >-
@@ -50,14 +46,10 @@ set_work_mode:
     WARNING: changing this may break the current connection!
     After changing from TCP Server to TCP Client or UDP, you may need to
     update the integration's connection settings accordingly.
-  fields:
+  target:
     device:
-      name: Device
-      description: Target device
-      required: true
-      selector:
-        device:
-          integration: hhc_n8i8op
+      integration: hhc_n8i8op
+  fields:
     mode:
       name: Mode
       description: >-
@@ -83,39 +75,24 @@ read_device_config:
     Sends SEARCH packet via UDP broadcast on port 65535, device responds
     with binary packet containing IP, subnet mask, gateway, ports,
     work mode, input mode, MAC address, and device name.
-  fields:
+  target:
     device:
-      name: Device
-      description: Target device
-      required: true
-      selector:
-        device:
-          integration: hhc_n8i8op
+      integration: hhc_n8i8op
 
 all_on:
   name: All relays on
   description: >-
     Turn ALL relays ON simultaneously by sending the 'allon' command.
     Equivalent to pressing the IN9 "All On" hardware button.
-  fields:
+  target:
     device:
-      name: Device
-      description: Target device
-      required: true
-      selector:
-        device:
-          integration: hhc_n8i8op
+      integration: hhc_n8i8op
 
 all_off:
   name: All relays off
   description: >-
     Turn ALL relays OFF simultaneously by sending the 'alloff' command.
     Equivalent to pressing the IN10 "All Off" hardware button.
-  fields:
+  target:
     device:
-      name: Device
-      description: Target device
-      required: true
-      selector:
-        device:
-          integration: hhc_n8i8op
+      integration: hhc_n8i8op
