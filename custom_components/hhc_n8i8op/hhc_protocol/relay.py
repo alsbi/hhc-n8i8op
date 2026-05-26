@@ -174,11 +174,11 @@ class HHCRelayClient:
         assert self._writer is not None
         assert self._reader is not None
 
-        self._writer.write(command.encode("ascii") + b"\n")
+        self._writer.write(command.encode("ascii"))
         await asyncio.wait_for(self._writer.drain(), timeout=self.timeout)
 
         data = await asyncio.wait_for(
-            self._reader.readuntil(b"\n"), timeout=self.timeout
+            self._reader.read(1024), timeout=self.timeout
         )
         if not data:
             raise OSError("Empty TCP response")

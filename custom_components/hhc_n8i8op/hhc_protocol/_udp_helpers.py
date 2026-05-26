@@ -11,8 +11,8 @@ import socket
 from typing import override
 
 __all__ = [
-    "_FutureProtocol",
     "_BinaryResponseProtocol",
+    "_FutureProtocol",
     "_TextResponseProtocol",
     "_UDPRelayProtocol",
     "_open_broadcast_socket",
@@ -52,6 +52,39 @@ class _BinaryResponseProtocol(_FutureProtocol):
     def datagram_received(self, data: bytes, addr: tuple[str | None, int]) -> None:
         if not self._future.done() and data:
             self._future.set_result(data)
+
+
+class _PeerResponseProtocol(asyncio.DatagramProtocol):
+    """Captures both response data and peer address.
+
+    Resolves a Future[tuple[bytes, str]] — (raw_data, sender_ip).
+    Used by discover() and read_config_unicast() to know WHICH device
+    actually responded (the real UDP source address).
+    """
+
+    def __init__(self, future: asyncio.Future[tuple[bytes, str]]) -> None:
+        self._future: asyncio.Future[tuple[bytes, str]] = future
+
+    @override
+    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
+        pass
+
+    @override
+    def datagram_received(self, data: bytes, addr: tuple[str | None, int]) -> None:
+        if not self._future.done() and data and addr[0] is not None:
+            self._future.set_result((data, addr[0]))
+
+    @override
+    def error_received(self, exc: Exception) -> None:
+        if not self._future.done():
+            self._future.set_exception(
+                exc if isinstance(exc, OSError) else OSError(exc)
+            )
+
+    @override
+    def connection_lost(self, exc: Exception | None) -> None:
+        if not self._future.done():
+            self._future.set_exception(exc or OSError("Connection lost"))
 
 
 class _TextResponseProtocol(_FutureProtocol):

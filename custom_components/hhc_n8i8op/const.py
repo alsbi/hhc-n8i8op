@@ -7,6 +7,7 @@ CONF_HOST = "host"
 CONF_PORT = "port"
 CONF_PROTOCOL = "protocol"
 CONF_CHANNEL_COUNT = "channel_count"
+CONF_MAC = "mac"  # device MAC address for naming
 
 # Config entry options keys (changeable via OptionsFlow)
 OPT_POLL_INTERVAL = "poll_interval"

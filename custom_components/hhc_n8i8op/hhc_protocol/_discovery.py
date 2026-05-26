@@ -10,10 +10,12 @@ import asyncio
 import logging
 import re
 import socket as _socket
+from functools import partial
 from typing import override
 
 from .config import (
     AT_PORT,
+    AT_RESPONSE_PORT,
     AT_SOURCE_PORT,
     DEFAULT_TIMEOUT,
     HHCDeviceConfig,
@@ -21,7 +23,7 @@ from .config import (
 )
 from ._udp_helpers import _BinaryResponseProtocol, _UDPRelayProtocol
 
-__all__ = ["discover", "scan_subnet", "read_config_unicast", "probe"]
+__all__ = ["discover", "probe", "read_config_unicast", "scan_subnet"]
 
 _LOGGER = logging.getLogger("hhc_protocol")
 _RE_RELAY = re.compile(r"^relay[01]{8}$")
@@ -47,57 +49,51 @@ async def discover(
     for attempt in range(3):
         loop = asyncio.get_running_loop()
         future: asyncio.Future[bytes] = loop.create_future()
-        transport: asyncio.DatagramTransport | None = None
+        t_send: asyncio.DatagramTransport | None = None
+        t_recv: asyncio.DatagramTransport | None = None
         try:
-            transport, _ = await loop.create_datagram_endpoint(
-                lambda: _BinaryResponseProtocol(future),
+            # Реле принимает на 65535, но отвечает на 65534 (китайская прошивка)
+            t_send, _ = await loop.create_datagram_endpoint(
+                partial(_BinaryResponseProtocol, future),
                 local_addr=("0.0.0.0", AT_SOURCE_PORT),
             )
-            sock = transport.get_extra_info("socket")
+            t_recv, _ = await loop.create_datagram_endpoint(
+                partial(_BinaryResponseProtocol, future),
+                local_addr=("0.0.0.0", AT_RESPONSE_PORT),
+            )
+            sock = t_send.get_extra_info("socket")
             if sock is not None:
                 sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_BROADCAST, 1)
 
             bcast = "255.255.255.255"
-            # Broadcast SEARCH + READIP, then unicast SEARCH to target IP
-            transport.sendto(search_payload, (bcast, AT_PORT))
+            t_send.sendto(search_payload, (bcast, AT_PORT))
             await asyncio.sleep(0.15)
-            transport.sendto(readip_payload, (bcast, AT_PORT))
+            t_send.sendto(readip_payload, (bcast, AT_PORT))
             await asyncio.sleep(0.15)
-            transport.sendto(search_payload, (ip, AT_PORT))
-            _LOGGER.debug(
-                "Attempt %d/3: sent SEARCH(bcast) + READIP(bcast) + SEARCH(%s)",
-                attempt + 1, ip,
-            )
+            t_send.sendto(search_payload, (ip, AT_PORT))
+            _LOGGER.debug("Attempt %d/3 sent to %s", attempt + 1, ip)
 
             data = await asyncio.wait_for(future, timeout=timeout)
             cfg = parse_search_response(data)
             if cfg is not None:
                 _LOGGER.info(
-                    "Discovered %s: name=%s mac=%s mode=%s inmode=%s port=%s",
-                    ip, cfg.name, cfg.mac, cfg.mode, cfg.inmode, cfg.local_port,
+                    "Discovered %s: name=%s mac=%s mode=%s inmode=%s",
+                    ip, cfg.name, cfg.mac, cfg.mode, cfg.inmode,
                 )
                 return cfg
-            _LOGGER.warning(
-                "Attempt %d/3 for %s: got %d bytes but not valid TLV response",
-                attempt + 1, ip, len(data),
-            )
         except asyncio.TimeoutError:
-            _LOGGER.info(
-                "Attempt %d/3 for %s timed out (%.1fs)",
-                attempt + 1, ip, timeout,
-            )
+            _LOGGER.debug("Attempt %d/3 for %s timed out", attempt + 1, ip)
         except OSError as exc:
-            _LOGGER.warning(
-                "Attempt %d/3 for %s network error: %s",
-                attempt + 1, ip, exc,
-            )
+            _LOGGER.debug("Attempt %d/3 for %s: %s", attempt + 1, ip, exc)
         finally:
-            if transport is not None:
-                transport.close()
+            if t_send is not None:
+                t_send.close()
+            if t_recv is not None:
+                t_recv.close()
         if attempt < 2:
             await asyncio.sleep(0.5)
 
-    _LOGGER.warning("Discovery failed after 3 attempts for %s", ip)
+    _LOGGER.warning("Discovery failed for %s", ip)
     return None
 
 
@@ -106,47 +102,80 @@ async def read_config_unicast(
 ) -> HHCDeviceConfig | None:
     """Read device config by sending READIP unicast to specific IP.
 
-    Unlike discover() which uses broadcast SEARCH+READIP,
-    this sends a single unicast READIP packet directly to the device.
-    Used when we already know the IP and need the full TLV config.
+    Реле принимает на 65535, но отвечает на 65534 (китайская прошивка).
+    Открываем два сокета: отправка с 65535, приём на 65534.
     """
     readip_payload = f'AT+READIP="{ip}"'.encode("ascii")
-    _LOGGER.debug("Reading config via unicast READIP for %s", ip)
+    _LOGGER.debug("READIP unicast to %s", ip)
     loop = asyncio.get_running_loop()
-    future: asyncio.Future[bytes] = loop.create_future()
-    transport: asyncio.DatagramTransport | None = None
+
+    # Shared future — whichever socket receives data first wins
+    future: asyncio.Future[tuple[bytes, str]] = loop.create_future()
+
+    class _AnyResponseProto(asyncio.DatagramProtocol):
+        def datagram_received(self, data: bytes, addr: tuple[str | None, int]) -> None:
+            if not future.done() and data and addr[0] is not None:
+                future.set_result((data, addr[0]))
+
+    t_send: asyncio.DatagramTransport | None = None
+    t_recv: asyncio.DatagramTransport | None = None
     try:
-        transport, _ = await loop.create_datagram_endpoint(
-            lambda: _BinaryResponseProtocol(future),
+        t_send, _ = await loop.create_datagram_endpoint(
+            lambda: _AnyResponseProto(),
             local_addr=("0.0.0.0", AT_SOURCE_PORT),
         )
-        # Unicast — send direct to device IP, no broadcast needed
-        transport.sendto(readip_payload, (ip, AT_PORT))
-        data = await asyncio.wait_for(future, timeout=timeout)
+        t_recv, _ = await loop.create_datagram_endpoint(
+            lambda: _AnyResponseProto(),
+            local_addr=("0.0.0.0", AT_RESPONSE_PORT),
+        )
+
+        t_send.sendto(readip_payload, (ip, AT_PORT))
+        _LOGGER.debug("Sent READIP to %s:%d", ip, AT_PORT)
+
+        data, sender_ip = await asyncio.wait_for(future, timeout=timeout)
+        _LOGGER.debug("Got %d bytes from %s", len(data), sender_ip)
+
         cfg = parse_search_response(data)
         if cfg is not None:
-            _LOGGER.info("Unicast config read for %s: name=%s mac=%s", ip, cfg.name, cfg.mac)
-            return cfg
-        _LOGGER.warning(
-            "Unicast READIP for %s: got %d bytes but not valid TLV", ip, len(data),
-        )
+            # Use real UDP sender as authoritative IP
+            use_ip = sender_ip
+            if cfg.ip and cfg.ip != sender_ip:
+                _LOGGER.debug(
+                    "Sender %s != TLV IP %s, using sender", sender_ip, cfg.ip,
+                )
+            real_cfg = HHCDeviceConfig(
+                ip=use_ip,
+                name=cfg.name,
+                mac=cfg.mac,
+                mode=cfg.mode,
+                inmode=cfg.inmode,
+                local_port=cfg.local_port,
+            )
+            _LOGGER.info("READIP OK for %s: name=%s mac=%s", use_ip, real_cfg.name, real_cfg.mac)
+            return real_cfg
+        _LOGGER.warning("READIP for %s: got %d bytes but not valid TLV", ip, len(data))
     except asyncio.TimeoutError:
-        _LOGGER.info("Unicast READIP timed out for %s (%.1fs)", ip, timeout)
+        _LOGGER.debug("READIP timed out for %s (%.1fs)", ip, timeout)
     except OSError as exc:
-        _LOGGER.warning("Unicast READIP failed for %s: %s", ip, exc)
+        _LOGGER.debug("READIP OSError for %s: %s", ip, exc)
     finally:
-        if transport is not None:
-            transport.close()
+        if t_send is not None:
+            t_send.close()
+        if t_recv is not None:
+            t_recv.close()
+    _LOGGER.warning("READIP failed for %s", ip)
     return None
 
 
 async def probe(ip: str, *, port: int = 5000, timeout: float = 5.0) -> str | None:
     """Auto-detect protocol (TCP vs UDP) on given port.
 
-    Sends 'read\\n' simultaneously over TCP and UDP.
+    Sends 'read' simultaneously over TCP and UDP.
     First valid 'relayXXXXXXXX' response wins; on tie, prefer UDP.
     Returns "tcp", "udp", or None if no response.
     """
+
+    _LOGGER.info("Probing %s:%d (timeout %.1fs)", ip, port, timeout)
 
     async def _tcp_probe() -> str | None:
         try:
@@ -154,14 +183,14 @@ async def probe(ip: str, *, port: int = 5000, timeout: float = 5.0) -> str | Non
                 asyncio.open_connection(ip, port), timeout=timeout
             )
             try:
-                writer.write(b"read\n")
+                writer.write(b"read")
                 await asyncio.wait_for(writer.drain(), timeout=timeout)
-                data = await asyncio.wait_for(reader.readuntil(b"\n"), timeout=timeout)
+                data = await asyncio.wait_for(reader.read(1024), timeout=timeout)
                 text = data.decode("ascii").strip()
                 if _RE_RELAY.match(text):
-                    _LOGGER.debug("TCP probe for %s: got '%s' → tcp", ip, text)
+                    _LOGGER.info("TCP probe for %s:%d: got '%s' → tcp", ip, port, text)
                     return "tcp"
-                _LOGGER.debug("TCP probe for %s: unexpected response '%s'", ip, text)
+                _LOGGER.info("TCP probe for %s:%d: unexpected response '%s'", ip, port, text)
             finally:
                 writer.close()
                 try:
@@ -169,11 +198,11 @@ async def probe(ip: str, *, port: int = 5000, timeout: float = 5.0) -> str | Non
                 except (OSError, asyncio.TimeoutError):
                     pass
         except asyncio.TimeoutError:
-            _LOGGER.debug("TCP probe for %s: connection timed out (%.1fs)", ip, timeout)
+            _LOGGER.debug("TCP probe for %s:%d: timed out (%.1fs)", ip, port, timeout)
         except OSError as exc:
-            _LOGGER.debug("TCP probe for %s: connection refused / network error: %s", ip, exc)
+            _LOGGER.debug("TCP probe for %s:%d: %s", ip, port, exc)
         except Exception as exc:
-            _LOGGER.warning("TCP probe for %s: unexpected error: %s", ip, exc)
+            _LOGGER.warning("TCP probe for %s:%d: unexpected error: %s", ip, port, exc)
         return None
 
     async def _udp_probe() -> str | None:
@@ -182,20 +211,20 @@ async def probe(ip: str, *, port: int = 5000, timeout: float = 5.0) -> str | Non
         transport = None
         try:
             transport, _ = await loop.create_datagram_endpoint(
-                lambda: _UDPRelayProtocol(b"read\n", future),
+                lambda: _UDPRelayProtocol(b"read", future),
                 remote_addr=(ip, port),
             )
             result = await asyncio.wait_for(future, timeout=timeout)
             if _RE_RELAY.match(result):
-                _LOGGER.debug("UDP probe for %s: got '%s' → udp", ip, result)
+                _LOGGER.info("UDP probe for %s:%d: got '%s' → udp", ip, port, result)
                 return "udp"
-            _LOGGER.debug("UDP probe for %s: unexpected response '%s'", ip, result)
+            _LOGGER.info("UDP probe for %s:%d: unexpected response '%s'", ip, port, result)
         except asyncio.TimeoutError:
-            _LOGGER.debug("UDP probe for %s: timed out (%.1fs)", ip, timeout)
+            _LOGGER.debug("UDP probe for %s:%d: timed out (%.1fs)", ip, port, timeout)
         except OSError as exc:
-            _LOGGER.debug("UDP probe for %s: network error: %s", ip, exc)
+            _LOGGER.debug("UDP probe for %s:%d: %s", ip, port, exc)
         except Exception as exc:
-            _LOGGER.warning("UDP probe for %s: unexpected error: %s", ip, exc)
+            _LOGGER.warning("UDP probe for %s:%d: unexpected error: %s", ip, port, exc)
         finally:
             if transport is not None:
                 transport.close()
@@ -315,13 +344,7 @@ async def scan_subnet(
             seen_ips.add(cfg.ip)
             results.append((cfg.ip, cfg))
         elif sender_ip not in seen_ips:
-            _LOGGER.debug(
-                "Scan: unparseable response from %s (%d bytes), adding as minimal device",
-                sender_ip, len(raw),
-            )
-            minimal_cfg = HHCDeviceConfig(ip=sender_ip)
-            seen_ips.add(sender_ip)
-            results.append((sender_ip, minimal_cfg))
+            _LOGGER.debug("Unparseable response from %s (%d bytes)", sender_ip, len(raw))
 
     if results:
         _LOGGER.info(

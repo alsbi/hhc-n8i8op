@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hhc-n8i8op-protocol"
+version = "3.5.1"
+description = "HHC-N8I8OP protocol implementation for Home Assistant"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.15.0",
+    "basedpyright>=1.12.0",
+    "radon>=6.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["custom_components/hhc_n8i8op/hhc_protocol"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+lint.select = ["ALL"]
+lint.ignore = [
+    "ANN401",   # any-type
+    "ARG002",   # unused method args (datagram_received addr)
+    "ASYNC109", # async timeout parameter (intentional convenience API)
+    "B023",     # lambda loop variable — false positive for asyncio.create_datagram_endpoint
+    "BLE001",   # broad exception catching (network robustness)
+    "C901",     # complexity (protocol parsing is inherently complex)
+    "COM812",   # trailing commas — auto-fixer handles this
+    "D",        # docstrings (allowed for HA integration)
+    "EM101",    # exception string literals
+    "EM102",    # exception f-string literals
+    "ERA001",   # commented code
+    "FA100",    # future annotations
+    "FBT001",   # boolean positional args
+    "FBT002",   # bool args
+    "I001",     # import sorting
+    "PLR0912",  # too many branches
+    "PLR0913",  # too many args
+    "PLR0915",  # too many statements
+    "PLR2004",  # magic values (protocol constants)
+    "PLW0108",  # unnecessary lambda (protocol factories)
+    "RUF002",   # cyrillic chars in docstrings
+    "RUF005",   # slice concatenation style
+    "S101",     # assert usage
+    "S104",     # binding to all interfaces (required for broadcast)
+    "SIM105",   # contextlib.suppress suggestions
+    "SIM114",   # combine if branches
+    "T201",     # print (CLI usage in __main__)
+    "TRY003",   # long messages
+    "UP041",    # asyncio.TimeoutError vs builtin (both work in 3.12)
+    "W293",     # blank line whitespace
+]
+
+[tool.basedpyright]
+pythonVersion = "3.12"
+strict = ["custom_components/hhc_n8i8op/hhc_protocol/"]
+extraPaths = ["custom_components/hhc_n8i8op"]
+
+deprecatedTags = {reportUnusedExpression = false}
+
+[tool.basedpyright.analysis]
+typeCheckingMode = "standard"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["custom_components/hhc_n8i8op"]
+
+[tool.radon]
+cc_min = "A"

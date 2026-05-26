@@ -36,6 +36,7 @@ from .const import (
     CHANNEL_TYPE_LIGHT,
     CHANNEL_TYPE_SWITCH,
     CONF_CHANNEL_COUNT,
+    CONF_MAC,
     CONF_PROTOCOL,
     DEFAULT_CHANNEL_COUNT,
     DEFAULT_POLL_INTERVAL,
@@ -87,6 +88,18 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
         self._dhcp_info: DhcpServiceInfo | None = None
         self._selected_device: dict[str, Any] | None = None
 
+    def _get_unique_device_title(self, base_title: str) -> str:
+        """Append (2), (3), etc. if base_title already used by another entry."""
+        existing: set[str] = {
+            e.title for e in self.hass.config_entries.async_entries(DOMAIN)
+        }
+        if base_title not in existing:
+            return base_title
+        n = 2
+        while f"{base_title} ({n})" in existing:
+            n += 1
+        return f"{base_title} ({n})"
+
     # ── DHCP Discovery ────────────────────────────────────────────────────
 
     async def async_step_dhcp(
@@ -129,13 +142,21 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
                 # async_abort raises, but type checker doesn't know that
                 return self.async_abort(reason="already_configured")  # pragma: no cover
 
-        # New device — verify with targeted AT+SEARCH broadcast
-        _LOGGER.info("DHCP: new device %s at %s, verifying with AT+SEARCH...", mac, ip)
+        # DHCP already knows the IP — read config directly via unicast READIP
+        _LOGGER.info("DHCP: new device %s at %s, verifying with unicast READIP...", mac, ip)
         cfg = None
         try:
-            cfg = await HHCATClient.discover(ip, timeout=10.0)
+            cfg = await HHCATClient.read_config_unicast(ip, timeout=10.0)
         except Exception as exc:
-            _LOGGER.warning("DHCP: SEARCH failed for %s: %s", ip, exc)
+            _LOGGER.warning("DHCP: READIP unicast failed for %s: %s", ip, exc)
+        
+        # Fallback: broadcast SEARCH (may not work in Docker)
+        if cfg is None:
+            _LOGGER.info("DHCP: trying broadcast SEARCH for %s...", ip)
+            try:
+                cfg = await HHCATClient.discover(ip, timeout=10.0)
+            except Exception as exc2:
+                _LOGGER.warning("DHCP: SEARCH failed for %s: %s", ip, exc2)
 
         if cfg is not None and cfg.ip == ip:
             dev_name = cfg.name or ""
@@ -152,6 +173,7 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_PORT: cfg.local_port or DEFAULT_PORT,
                     CONF_PROTOCOL: protocol,
                     CONF_CHANNEL_COUNT: DEFAULT_CHANNEL_COUNT,
+                    CONF_MAC: mac,
                 },
                 options={
                     OPT_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
@@ -260,6 +282,7 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_PORT: info[CONF_PORT],
                     CONF_PROTOCOL: info[CONF_PROTOCOL],
                     CONF_CHANNEL_COUNT: info[CONF_CHANNEL_COUNT],
+                    CONF_MAC: mac,
                 },
                 options={
                     OPT_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
@@ -301,28 +324,47 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
             try:
                 protocol = await HHCATClient.probe(host, port=port, timeout=5.0)
             except Exception as exc:
-                _LOGGER.debug("Probe failed for %s:%d: %s", host, port, exc)
+                _LOGGER.error("Probe CRASHED for %s:%d: %s", host, port, exc, exc_info=True)
+                protocol = None
 
             if protocol is None:
+                _LOGGER.error("Cannot connect to %s:%d — no TCP/UDP response", host, port)
                 errors["base"] = "cannot_connect"
             else:
-                _LOGGER.info("Manual setup: probe detected %s:%d → %s", host, port, protocol)
+                _LOGGER.info("Detected protocol for %s:%d → %s", host, port, protocol)
 
                 unique_id = (
                     self._dhcp_info.macaddress
                     if self._dhcp_info is not None
                     else host
                 )
+                mac_from_dhcp = (
+                    self._dhcp_info.macaddress
+                    if self._dhcp_info is not None
+                    else None
+                )
                 await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
 
+                # Build device name: last 4 hex digits of MAC if available
+                if mac_from_dhcp:
+                    mac_clean = mac_from_dhcp.replace(":", "").lower()
+                    short_mac = mac_clean[-4:] if len(mac_clean) >= 4 else mac_clean
+                    default_title = f"hhc n8i8op [{short_mac}]"
+                    entry_mac = mac_from_dhcp
+                else:
+                    short_host = host.rsplit(".", 1)[-1]  # last octet
+                    default_title = f"hhc n8i8op ({short_host})"
+                    entry_mac = None
+
                 return self.async_create_entry(
-                    title=f"hhc n8i8op ({host})",
+                    title=default_title,
                     data={
                         CONF_HOST: host,
                         CONF_PORT: port,
                         CONF_PROTOCOL: protocol,
                         CONF_CHANNEL_COUNT: DEFAULT_CHANNEL_COUNT,
+                        CONF_MAC: entry_mac,
                     },
                     options={
                         OPT_POLL_INTERVAL: DEFAULT_POLL_INTERVAL,
@@ -410,6 +452,11 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
 
         for ip_addr, cfg in devices:
             uid = cfg.mac or ip_addr
+            _LOGGER.info(
+                "  → scan result: ip=%s mac=%s name=%r mode=%s — %s",
+                ip_addr, cfg.mac or "none", cfg.name or "", cfg.mode,
+                "already configured" if uid in configured_uids else "new"
+            )
             if uid in configured_uids:
                 _LOGGER.debug("Skipping already configured device %s (%s)", ip_addr, uid)
                 continue

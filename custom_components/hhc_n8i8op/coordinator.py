@@ -95,15 +95,48 @@ class HHCCoordinator(DataUpdateCoordinator[HHCDeviceState]):
 
     @property
     def device_id(self) -> str:
-        """Unique identifier for Device Registry grouping."""
-        return self.client.host
+        """Unique identifier for entity IDs and device grouping.
+
+        Produces entity IDs like:
+          switch.hhc_n8i8op_A1B2C3D4_ch1_switch
+        Uses last 8 hex chars of MAC if available, else entry_id prefix.
+        """
+        # 1. MAC stored in config entry data (DHCP / scan discovery)
+        mac = self.config_entry.data.get("mac")
+        if mac and isinstance(mac, str):
+            mac_clean = mac.replace(":", "").replace("-", "").lower()
+            if len(mac_clean) >= 8:
+                return f"hhc_n8i8op_{mac_clean[-8:]}"
+            if len(mac_clean) >= 4:
+                return f"hhc_n8i8op_{mac_clean}"
+
+        # 2. HA unique_id itself (for DHCP entries this IS the MAC)
+        uid = self.config_entry.unique_id
+        if uid and isinstance(uid, str):
+            uid_clean = uid.replace(":", "").replace("-", "").lower()
+            if len(uid_clean) >= 8:
+                return f"hhc_n8i8op_{uid_clean[-8:]}"
+
+        # 3. Fallback: first 8 chars of HA entry_id
+        return f"hhc_n8i8op_{self.config_entry.entry_id[:8]}"
 
     @property
     def device_name(self) -> str:
         stored = self.config_entry.options.get(OPT_DEVICE_NAME, "")
         if stored:
             return f"{stored} ({self.client.host})"
-        return f"hhc n8i8op ({self.client.host})"
+        
+        # Use last 4 hex digits of MAC if available
+        mac = self.config_entry.data.get("mac")
+        if mac:
+            mac_clean = mac.replace(":", "").lower()
+            short_mac = mac_clean[-4:] if len(mac_clean) >= 4 else mac_clean
+            return f"hhc n8i8op [{short_mac.upper()}]"
+        
+        # Fallback to last 4 chars of HA config entry unique ID
+        entry_id = self.config_entry.entry_id
+        short_id = entry_id[-4:] if len(entry_id) >= 4 else entry_id
+        return f"hhc n8i8op [{short_id}]"
 
     @property
     def channel_count(self) -> int:
