@@ -7,6 +7,10 @@ __pycache__/
 # HA
 home-assistant_v2.db
 home-assistant.log
+test-config/
+
+# Tests (keep locally, not in repo)
+tests/
 
 # macOS
 .DS_Store

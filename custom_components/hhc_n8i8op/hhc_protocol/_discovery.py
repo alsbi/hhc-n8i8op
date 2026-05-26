@@ -140,8 +140,8 @@ async def read_config_unicast(
     return None
 
 
-async def probe(ip: str, *, timeout: float = 5.0) -> str | None:
-    """Auto-detect protocol (TCP vs UDP) on port 5000.
+async def probe(ip: str, *, port: int = 5000, timeout: float = 5.0) -> str | None:
+    """Auto-detect protocol (TCP vs UDP) on given port.
 
     Sends 'read\\n' simultaneously over TCP and UDP.
     First valid 'relayXXXXXXXX' response wins; on tie, prefer UDP.
@@ -151,7 +151,7 @@ async def probe(ip: str, *, timeout: float = 5.0) -> str | None:
     async def _tcp_probe() -> str | None:
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip, 5000), timeout=timeout
+                asyncio.open_connection(ip, port), timeout=timeout
             )
             try:
                 writer.write(b"read\n")
@@ -159,15 +159,21 @@ async def probe(ip: str, *, timeout: float = 5.0) -> str | None:
                 data = await asyncio.wait_for(reader.readuntil(b"\n"), timeout=timeout)
                 text = data.decode("ascii").strip()
                 if _RE_RELAY.match(text):
+                    _LOGGER.debug("TCP probe for %s: got '%s' → tcp", ip, text)
                     return "tcp"
+                _LOGGER.debug("TCP probe for %s: unexpected response '%s'", ip, text)
             finally:
                 writer.close()
                 try:
                     await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
                 except (OSError, asyncio.TimeoutError):
                     pass
-        except Exception:
-            pass
+        except asyncio.TimeoutError:
+            _LOGGER.debug("TCP probe for %s: connection timed out (%.1fs)", ip, timeout)
+        except OSError as exc:
+            _LOGGER.debug("TCP probe for %s: connection refused / network error: %s", ip, exc)
+        except Exception as exc:
+            _LOGGER.warning("TCP probe for %s: unexpected error: %s", ip, exc)
         return None
 
     async def _udp_probe() -> str | None:
@@ -177,13 +183,19 @@ async def probe(ip: str, *, timeout: float = 5.0) -> str | None:
         try:
             transport, _ = await loop.create_datagram_endpoint(
                 lambda: _UDPRelayProtocol(b"read\n", future),
-                remote_addr=(ip, 5000),
+                remote_addr=(ip, port),
             )
             result = await asyncio.wait_for(future, timeout=timeout)
             if _RE_RELAY.match(result):
+                _LOGGER.debug("UDP probe for %s: got '%s' → udp", ip, result)
                 return "udp"
-        except Exception:
-            pass
+            _LOGGER.debug("UDP probe for %s: unexpected response '%s'", ip, result)
+        except asyncio.TimeoutError:
+            _LOGGER.debug("UDP probe for %s: timed out (%.1fs)", ip, timeout)
+        except OSError as exc:
+            _LOGGER.debug("UDP probe for %s: network error: %s", ip, exc)
+        except Exception as exc:
+            _LOGGER.warning("UDP probe for %s: unexpected error: %s", ip, exc)
         finally:
             if transport is not None:
                 transport.close()
@@ -201,7 +213,10 @@ async def probe(ip: str, *, timeout: float = 5.0) -> str | None:
         for task in done:
             try:
                 result = task.result()
-            except Exception:
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                result = None
+            except Exception as exc:
+                _LOGGER.debug("Probe task exception: %s", exc)
                 result = None
             if task is tcp_task:
                 tcp_result = result

@@ -286,27 +286,27 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manual entry — user enters IP only.
+        """Manual entry — user enters IP and optional port.
 
-        Probe auto-detects TCP vs UDP on port 5000.
-        If device is unreachable, shows error — no entry is created.
+        Auto-detects TCP vs UDP. Port defaults to 5000 but user can override.
         """
         errors: dict[str, str] = {}
 
         if user_input is not None:
             host: str = user_input[CONF_HOST]
+            port: int = user_input.get(CONF_PORT, DEFAULT_PORT)
 
             # Auto-detect protocol via probe (TCP + UDP in parallel)
             protocol: str | None = None
             try:
-                protocol = await HHCATClient.probe(host, timeout=5.0)
-            except Exception:
-                pass
+                protocol = await HHCATClient.probe(host, port=port, timeout=5.0)
+            except Exception as exc:
+                _LOGGER.debug("Probe failed for %s:%d: %s", host, port, exc)
 
             if protocol is None:
                 errors["base"] = "cannot_connect"
             else:
-                _LOGGER.info("Manual setup: probe detected %s → %s", host, protocol)
+                _LOGGER.info("Manual setup: probe detected %s:%d → %s", host, port, protocol)
 
                 unique_id = (
                     self._dhcp_info.macaddress
@@ -320,7 +320,7 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
                     title=f"hhc n8i8op ({host})",
                     data={
                         CONF_HOST: host,
-                        CONF_PORT: DEFAULT_PORT,
+                        CONF_PORT: port,
                         CONF_PROTOCOL: protocol,
                         CONF_CHANNEL_COUNT: DEFAULT_CHANNEL_COUNT,
                     },
@@ -334,6 +334,7 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema({
             vol.Required(CONF_HOST, default=default_host): str,
+            vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.positive_int,
         })
 
         return self.async_show_form(step_id="manual", data_schema=schema, errors=errors)
@@ -533,7 +534,7 @@ class HHCOptionsFlow(OptionsFlowWithReload):
                     device_config.name,
                 )
             except Exception:
-                _LOGGER.warning("Could not read device config for options form")
+                _LOGGER.warning("Could not read device config for options form: %s", exc)
 
         # Determine input mode default + options list.
         #
