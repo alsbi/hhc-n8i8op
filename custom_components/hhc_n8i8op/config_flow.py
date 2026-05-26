@@ -299,7 +299,7 @@ class HHCConfigFlow(ConfigFlow, domain=DOMAIN):
             # Auto-detect protocol via probe (TCP + UDP in parallel)
             protocol: str | None = None
             try:
-                protocol = await HHCATClient.probe(host, timeout=15.0)
+                protocol = await HHCATClient.probe(host, timeout=5.0)
             except Exception:
                 pass
 
