@@ -7,11 +7,11 @@ Every test either:
 
 from __future__ import annotations
 
-import struct
 import pytest
 
 # We test the module directly, no HA dependency
-import sys, os
+import os
+import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "custom_components", "hhc_n8i8op"))
 
 from hhc_protocol import (
@@ -415,13 +415,11 @@ class TestToAtBytes:
         """AT+STATUS=0 must appear as the last command before optional SAVE."""
         cfg = self._make_config_from_capture()
         payload = cfg.to_at_bytes("192.168.0.105")
-        save_suffix = b"AT+SAVE=1"
 
-        # Without SAVE
         status_pos = payload.rfind(b"AT+STATUS=0")
         assert status_pos >= 0
 
-        # Nothing meaningful after STATUS except possible SAVE
+        # Nothing meaningful after STATUS (SAVE is separate call if needed)
         after_status = payload[status_pos + len(b"AT+STATUS=0"):]
         assert after_status == b"", \
             f"Unexpected content after STATUS: {after_status!r}"

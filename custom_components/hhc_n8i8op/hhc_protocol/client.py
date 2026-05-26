@@ -9,10 +9,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket as _socket
+import sys
 
-from .config import AT_PORT, AT_SOURCE_PORT, DEFAULT_TIMEOUT, HHCDeviceConfig
+from .config import AT_PORT, AT_RESPONSE_PORT, AT_SOURCE_PORT, DEFAULT_TIMEOUT, HHCDeviceConfig
 from ._discovery import discover, scan_subnet, read_config_unicast, probe
-from ._udp_helpers import _TextResponseProtocol
+from .relay import HHCRelayClient
+
 
 __all__ = ["HHCClient"]
 
@@ -42,12 +44,12 @@ class HHCClient:
             self._udp_transport = None
 
     async def read_config(self) -> HHCDeviceConfig | None:
-        """Read FULL current device configuration.
+        """Read FULL current device configuration via unicast READIP.
 
-        First step before ANY write operation.
+        Sends AT+READIP directly to the device IP (no broadcast needed).
         Stores result in cache for fallback during writes.
         """
-        cfg = await self.discover(self.host, timeout=self.timeout)
+        cfg = await self.read_config_unicast(self.host, timeout=self.timeout)
         if cfg is not None:
             self._cached_config = cfg
         return cfg
@@ -155,47 +157,57 @@ class HHCClient:
         return None
 
     async def _send_at(self, payload: bytes) -> str | None:
-        """Send raw bytes AT+ payload via UDP broadcast. Returns response or None."""
-        bcast = ".".join(self.host.split(".")[:3] + ["255"])
-        targets = [
-            ("255.255.255.255", AT_PORT),
-            (bcast, AT_PORT),
-            (self.host, AT_PORT),
-        ]
-        async with self._lock:
-            for local_port in [AT_SOURCE_PORT, 0]:
-                loop = asyncio.get_running_loop()
-                future: asyncio.Future[bytes] = loop.create_future()
-                transport: asyncio.DatagramTransport | None = None
+        """Send raw bytes AT+ payload via UDP. Returns response or None.
+
+        Реле принимает на 65535, но отвечает на 65534 (китайская прошивка).
+        Открываем два сокета: отправка с 65535, приём на 65534.
+        """
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[bytes] = loop.create_future()
+
+        class _AtResponseProto(asyncio.DatagramProtocol):
+            def datagram_received(self, data: bytes, addr: tuple[str | None, int]) -> None:
+                if not future.done() and data:
+                    future.set_result(data)
+
+        t_send: asyncio.DatagramTransport | None = None
+        t_recv: asyncio.DatagramTransport | None = None
+        try:
+            t_send, _ = await loop.create_datagram_endpoint(
+                lambda: _AtResponseProto(),
+                local_addr=("0.0.0.0", AT_SOURCE_PORT),
+            )
+            t_recv, _ = await loop.create_datagram_endpoint(
+                lambda: _AtResponseProto(),
+                local_addr=("0.0.0.0", AT_RESPONSE_PORT),
+            )
+            sock = t_send.get_extra_info("socket")
+            if sock is not None:
+                sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_BROADCAST, 1)
+
+            # Send to broadcast + unicast
+            bcast = ".".join(self.host.split(".")[:3] + ["255"])
+            for addr in [
+                ("255.255.255.255", AT_PORT),
+                (bcast, AT_PORT),
+                (self.host, AT_PORT),
+            ]:
                 try:
-                    transport, _ = await loop.create_datagram_endpoint(
-                        lambda: _TextResponseProtocol(future),
-                        local_addr=("0.0.0.0", local_port),
-                    )
-                    sock = transport.get_extra_info("socket")
-                    if sock is not None:
-                        sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_BROADCAST, 1)
-                    for addr in targets:
-                        try:
-                            transport.sendto(payload, addr)
-                        except OSError:
-                            pass
-                    data = await asyncio.wait_for(future, timeout=self.timeout)
-                    return data.decode("ascii").strip()
-                except asyncio.TimeoutError:
-                    return None
+                    t_send.sendto(payload, addr)
                 except OSError:
-                    if local_port == AT_SOURCE_PORT:
-                        _LOGGER.warning(
-                            "Cannot bind to source port %d, falling back to random port.",
-                            AT_SOURCE_PORT,
-                        )
-                    continue
-                finally:
-                    if transport is not None and transport is not self._udp_transport:
-                        transport.close()
-            _LOGGER.warning("All AT send attempts failed for %s", self.host)
+                    pass
+
+            data = await asyncio.wait_for(future, timeout=self.timeout)
+            return data.decode("ascii", errors="replace").strip()
+        except asyncio.TimeoutError:
             return None
+        except OSError:
+            return None
+        finally:
+            if t_send is not None:
+                t_send.close()
+            if t_recv is not None:
+                t_recv.close()
 
 
 # ── CLI helpers ───────────────────────────────────────────────────────────
@@ -203,7 +215,6 @@ class HHCClient:
 
 def _main() -> None:
     """Quick CLI: python -m hhc_protocol <ip> [command]."""
-    import sys
 
     if len(sys.argv) < 2:
         print("Usage: python -m hhc_protocol <device_ip> [relay_command]")
@@ -216,8 +227,6 @@ def _main() -> None:
     async def run() -> None:
         if len(sys.argv) >= 3:
             cmd = sys.argv[2]
-            from .relay import HHCRelayClient
-
             client = HHCRelayClient(ip_addr)
             result = await client.send_command(cmd)
             print(result)

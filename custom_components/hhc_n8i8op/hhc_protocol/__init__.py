@@ -31,9 +31,9 @@ __all__ = [
     "DEFAULT_DATA_PORT",
     "DEFAULT_TIMEOUT",
     "RELAY_CHANNELS",
-    "HHCDeviceConfig",
-    "parse_tlv",
-    "parse_search_response",
     "HHCClient",
+    "HHCDeviceConfig",
     "HHCRelayClient",
+    "parse_search_response",
+    "parse_tlv",
 ]

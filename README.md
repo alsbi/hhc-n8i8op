@@ -141,7 +141,7 @@ read      read relay states       input     read input states
 
 Configuration — UDP broadcast on port 65535. All `AT+` commands must be sent as one concatenated string in a single datagram. `AT+SET="<ip>"` filters by device address.
 
-Full protocol details: [SPECIFICATION.md](SPECIFICATION.md).
+Full protocol specification: [`docs/PROTOCOL_SPEC.md`](docs/PROTOCOL_SPEC.md)
 
 ## Changelog
 
